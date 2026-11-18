@@ -80,6 +80,8 @@ h1{font-size:30px;line-height:1.12;margin:0 0 8px;letter-spacing:-.8px}h2{font-s
 const KEY='meta-goals-v1';
 const SUPABASE_URL='https://niltdqdztncbypmtzufh.supabase.co';
 const SUPABASE_ANON_KEY='sb_publishable_JeDZCWn_9i11i6P7NQRtDA_49Vh2z_-';
+// Será preenchida após gerar a chave pública VAPID e configurar o servidor.
+const VAPID_PUBLIC_KEY='BMEnk5jk6yWMlg9vZS_-FfPZl1GKGMlySbJzFR9_aE-TWJHxpyxheUz1WAsiQ4R75Y9sglzNLSL24Mor7wRvFUs';
 const supabaseClient=window.supabase?.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
 let goals=load(), currentId=null, currentUser=null, cloudReady=false, syncTimer=null, syncBusy=false;
 function load(){try{return JSON.parse(localStorage.getItem(KEY)||'[]')}catch(e){return []}}
@@ -128,7 +130,23 @@ let swRegistration=null;
 if('serviceWorker' in navigator && location.protocol.startsWith('http'))window.addEventListener('load',async()=>{try{swRegistration=await navigator.serviceWorker.register('./sw.js');const p=Notification.permission;document.getElementById('pushStatus').textContent=p==='granted'?'Permissão de notificações concedida neste iPhone. O envio remoto ainda depende da conexão com o servidor.':p==='denied'?'Permissão bloqueada nas configurações do iPhone.':'As notificações push precisam de configuração de servidor para serem enviadas mesmo com o META fechado.';runDueReminders()}catch(e){console.warn('Service worker não registrado',e)}});
 function smartReminderFor(g){const pending=(g.tasks||[]).filter(t=>!t.done);if(!pending.length)return null;let task=pending[0];if(g.date){const days=Math.ceil((new Date(g.date+'T12:00:00')-new Date())/86400000);if(days>=0&&days<=7)task=pending[pending.length-1]}return {title:'Uma pequena ação hoje',body:`Você tem uma etapa pendente em “${g.name}”. Que tal dedicar 15 minutos a: ${task.name}?`,key:`smart-${task.id}`}}
 function runDueReminders(){if(!swRegistration||Notification.permission!=='granted')return;const now=new Date(),day=now.getDay(),today=now.toISOString().slice(0,10),minutes=now.getHours()*60+now.getMinutes();goals.forEach(g=>{const r=g.reminder;if(!r?.enabled||!(r.days||[]).includes(day))return;const [hh,mm]=(r.time||'19:00').split(':').map(Number),target=hh*60+mm;if(minutes<target||minutes>target+30)return;const last=r.lastSentAt?new Date(r.lastSentAt):null;if(last&&((now-last)/86400000)<Number(r.frequency||1))return;let payload;if(r.mode==='smart'){payload=smartReminderFor(g);if(!payload||r.lastMessageKey===payload.key)return}else payload={title:'Um passo de cada vez',body:`Que tal avançar um pouco na sua meta “${g.name}” hoje?`,key:`fixed-${today}`};swRegistration.showNotification(payload.title,{body:payload.body,icon:'./icons/icon-192.png',badge:'./icons/icon-192.png',tag:`meta-${g.id}`,renotify:false,data:{url:'./'}});r.lastSentAt=now.toISOString();r.lastMessageKey=payload.key;localStorage.setItem(KEY,JSON.stringify(goals))})}
-document.getElementById('enablePushBtn').onclick=async()=>{if(!('serviceWorker'in navigator)||!('PushManager'in window)||!('Notification'in window)){alert('Este navegador não oferece suporte a notificações push. No iPhone, abra o META pelo ícone instalado na Tela de Início e use iOS 16.4 ou posterior.');return}if(!swRegistration)swRegistration=await navigator.serviceWorker.ready;const permission=await Notification.requestPermission();if(permission!=='granted'){document.getElementById('pushStatus').textContent='Permissão não concedida.';return}document.getElementById('pushStatus').textContent='Permissão concedida. Falta conectar o servidor de envio e cadastrar esta assinatura para receber notificações com o META fechado.';runDueReminders();alert('Permissão concedida! Os lembretes locais serão verificados quando o META estiver aberto. O envio remoto com o META fechado ainda depende da conexão com o servidor.');};
+function urlBase64ToUint8Array(base64String){const padding='='.repeat((4-base64String.length%4)%4);const raw=atob((base64String+padding).replace(/-/g,'+').replace(/_/g,'/'));return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)))}
+document.getElementById('enablePushBtn').onclick=async()=>{
+ if(!('serviceWorker'in navigator)||!('PushManager'in window)||!('Notification'in window)){alert('Este navegador não oferece suporte a notificações push. No iPhone, abra o META pelo ícone instalado na Tela de Início e use iOS 16.4 ou posterior.');return}
+ if(!currentUser||!supabaseClient){alert('Entre na sua conta META antes de ativar as notificações.');return}
+ if(VAPID_PUBLIC_KEY.startsWith('COLE_AQUI')){alert('A configuração do servidor de notificações ainda não foi concluída.');return}
+ try{
+  if(!swRegistration)swRegistration=await navigator.serviceWorker.ready;
+  const permission=await Notification.requestPermission();
+  if(permission!=='granted'){document.getElementById('pushStatus').textContent='Permissão não concedida.';return}
+  let subscription=await swRegistration.pushManager.getSubscription();
+  if(!subscription)subscription=await swRegistration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(VAPID_PUBLIC_KEY)});
+  const {error}=await supabaseClient.from('push_subscriptions').upsert({user_id:currentUser.id,endpoint:subscription.endpoint,subscription:subscription.toJSON()},{onConflict:'user_id,endpoint'});
+  if(error)throw error;
+  document.getElementById('pushStatus').textContent='Este iPhone está cadastrado para receber notificações. O envio será ativado quando o servidor estiver publicado.';
+  alert('Este iPhone foi cadastrado. Falta publicar e agendar o servidor de envio.');
+ }catch(err){console.error(err);alert('Não foi possível cadastrar este iPhone: '+(err.message||'erro desconhecido'))}
+};
 render();
 restoreSession();
 setInterval(()=>{if(document.visibilityState==='visible')runDueReminders()},60000);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')runDueReminders()});
